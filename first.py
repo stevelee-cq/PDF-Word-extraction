@@ -7,11 +7,13 @@ from nltk.corpus import words as nltk_words
 from nltk.corpus import stopwords
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLabel, QVBoxLayout,
-    QWidget, QFileDialog, QTextEdit, QCheckBox, QMessageBox, QProgressBar,
+    QWidget, QFileDialog, QTextEdit, QMessageBox, QProgressBar,
     QHBoxLayout, QLineEdit
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from wordcloud import WordCloud
+import matplotlib
+matplotlib.rcParams['axes.unicode_minus'] = False
 import matplotlib.pyplot as plt
 
 # ========== 资源初始化 ==========
@@ -55,8 +57,8 @@ class ExtractWorker(QThread):
 class PDFWordExtractor(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("英文PDF单词词频提取器（词云可视化 | 页码选择 | 美观夜间风格）")
-        self.setGeometry(100, 100, 880, 700)
+        self.setWindowTitle("英文PDF单词词频提取器（可视化 | 页码选择 | 夜间风格）")
+        self.setGeometry(100, 100, 900, 720)
         self.set_dark_theme_style()
 
         # 控件定义
@@ -73,7 +75,10 @@ class PDFWordExtractor(QMainWindow):
         self.extract_button = QPushButton("提取并统计词频")
         self.wordcloud_button = QPushButton("生成词云图")
         self.wordcloud_button.setEnabled(False)
-        self.save_checkbox = QCheckBox("提取后保存为 .txt 文件")
+        self.bar_button = QPushButton("高频词条形图")
+        self.bar_button.setEnabled(False)
+        self.save_button = QPushButton("保存为 txt")
+        self.save_button.setEnabled(False)
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
@@ -88,9 +93,10 @@ class PDFWordExtractor(QMainWindow):
         layout.addWidget(self.label)
         layout.addWidget(self.select_button)
         layout.addLayout(page_layout)
-        layout.addWidget(self.save_checkbox)
         layout.addWidget(self.extract_button)
         layout.addWidget(self.wordcloud_button)
+        layout.addWidget(self.bar_button)
+        layout.addWidget(self.save_button)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.text_edit)
 
@@ -102,6 +108,8 @@ class PDFWordExtractor(QMainWindow):
         self.select_button.clicked.connect(self.select_pdf)
         self.extract_button.clicked.connect(self.extract_words)
         self.wordcloud_button.clicked.connect(self.show_wordcloud)
+        self.bar_button.clicked.connect(self.show_bar_chart)
+        self.save_button.clicked.connect(self.save_txt)
 
         self.pdf_path = ""
         self.worker = None
@@ -186,6 +194,8 @@ class PDFWordExtractor(QMainWindow):
         self.text_edit.clear()
         self.progress_bar.setValue(0)
         self.wordcloud_button.setEnabled(False)
+        self.bar_button.setEnabled(False)
+        self.save_button.setEnabled(False)
         self.text_edit.append(f"⏳ 正在分析第 {start_page} 页至第 {end_page} 页内容...\n")
 
         self.worker = ExtractWorker(self.pdf_path, start_page, end_page)
@@ -197,10 +207,14 @@ class PDFWordExtractor(QMainWindow):
         if "❌ 提取失败" in word_counter:
             self.text_edit.append("❌ 提取失败，请检查PDF是否包含可识别文本内容。")
             self.wordcloud_button.setEnabled(False)
+            self.bar_button.setEnabled(False)
+            self.save_button.setEnabled(False)
             return
 
         self.word_counter = word_counter
         self.wordcloud_button.setEnabled(True)
+        self.bar_button.setEnabled(True)
+        self.save_button.setEnabled(True)
 
         total_unique = len(word_counter)
         total_count = sum(word_counter.values())
@@ -211,16 +225,44 @@ class PDFWordExtractor(QMainWindow):
         for word, freq in sorted_items:
             self.text_edit.append(f"{word:<20} {freq}")
 
-        if self.save_checkbox.isChecked():
-            base_name = os.path.splitext(os.path.basename(pdf_path))[0]
-            out_path = os.path.join(os.path.dirname(pdf_path), base_name + "_词频统计.txt")
+        self.progress_bar.setValue(100)
+
+    def save_txt(self):
+        if not self.word_counter or sum(self.word_counter.values()) == 0:
+            QMessageBox.information(self, "提示", "无有效词频数据，请先提取词频。")
+            return
+
+        base_name = os.path.splitext(os.path.basename(self.pdf_path))[0]
+        out_path, _ = QFileDialog.getSaveFileName(self, "保存为...", base_name + "_词频统计.txt", "Text Files (*.txt)")
+        if not out_path:
+            return
+
+        total_unique = len(self.word_counter)
+        total_count = sum(self.word_counter.values())
+        sorted_items = self.word_counter.most_common()
+        try:
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(f"总词数：{total_count}，唯一词汇：{total_unique} 个\n\n")
                 for word, freq in sorted_items:
                     f.write(f"{word:<20} {freq}\n")
-            self.text_edit.append(f"\n💾 结果已保存至：{out_path}")
+            QMessageBox.information(self, "保存成功", f"词频统计结果已保存至：\n{out_path}")
+        except Exception as e:
+            QMessageBox.warning(self, "保存失败", f"保存文件失败：{e}")
 
-        self.progress_bar.setValue(100)
+    def get_font_path(self):
+        import matplotlib.font_manager as fm
+        for font in ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']:
+            for f in fm.fontManager.ttflist:
+                if font in f.name:
+                    return f.fname
+        return None
+
+    def get_zh_font(self):
+        import matplotlib.font_manager as fm
+        for font in ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']:
+            if any(font in f.name for f in fm.fontManager.ttflist):
+                return fm.FontProperties(fname=fm.findfont(font))
+        return None
 
     def show_wordcloud(self):
         if not self.word_counter or sum(self.word_counter.values()) == 0:
@@ -228,18 +270,37 @@ class PDFWordExtractor(QMainWindow):
             return
 
         wc = WordCloud(
-            width=800,
+            width=1000,
             height=400,
             background_color='white',
             max_words=200,
-            colormap='viridis'
+            colormap='viridis',
+            prefer_horizontal=1.0,
+            font_path=self.get_font_path()
         )
         wc.generate_from_frequencies(self.word_counter)
 
-        plt.figure(figsize=(10, 5))
+        plt.figure(figsize=(14, 6))
         plt.imshow(wc, interpolation="bilinear")
         plt.axis("off")
-        plt.title("词频词云", fontsize=16)
+        plt.title("词频词云", fontsize=18, fontproperties=self.get_zh_font())
+        plt.tight_layout()
+        plt.show()
+
+    def show_bar_chart(self):
+        if not self.word_counter or sum(self.word_counter.values()) == 0:
+            QMessageBox.information(self, "提示", "无有效词频数据，请先提取词频。")
+            return
+
+        top_items = self.word_counter.most_common(20)
+        words, freqs = zip(*top_items)
+        plt.figure(figsize=(12, 7))
+        bars = plt.barh(words, freqs, color='#3A99D8')
+        plt.xlabel("频数", fontsize=14)
+        plt.title("Top 20 高频词横向条形统计", fontsize=16, fontproperties=self.get_zh_font())
+        plt.gca().invert_yaxis()
+        for bar in bars:
+            plt.text(bar.get_width()+0.2, bar.get_y()+bar.get_height()/2, int(bar.get_width()), va='center', fontsize=12)
         plt.tight_layout()
         plt.show()
 
